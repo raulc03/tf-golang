@@ -6,35 +6,11 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
-)
 
-type Frame struct {
-	Cmd    string   `json:"cmd"`
-	Sender string   `json:"sender"`
-	Data   []string `json:"data"`
-}
-
-type Info struct {
-	nextNode string
-	nextNum  int
-	imFirst  bool
-	cont     int
-}
-
-type InfoCons struct {
-	contA, contB int
-}
-
-var (
-	host         string
-	myNum        int
-	chRemotes    chan []string
-	chInfo       chan Info
-	chCons       chan InfoCons
-	participants int
+	"github.com/raulc03/tf-golang/blockchain"
+	"github.com/raulc03/tf-golang/handlers"
+	"github.com/raulc03/tf-golang/utils"
 )
 
 func main() {
@@ -42,145 +18,89 @@ func main() {
 	if len(os.Args) == 1 {
 		log.Println("Hostname not given")
 	} else {
-		host = os.Args[1]
-		chRemotes = make(chan []string, 1)
-		chInfo = make(chan Info, 1)
-		chCons = make(chan InfoCons, 1)
-
-		chRemotes <- []string{}
+		utils.Host = os.Args[1]
+		utils.ChRemotes = make(chan []string, 1)
+		utils.ChCons = make(chan map[string]int, 1)
+		utils.ChBlockchain = make(chan blockchain.BlockChain, 1)
+		utils.ChRemotes <- []string{}
+		utils.ChCons <- make(map[string]int)
+		aux_bc := blockchain.InitBlockChain()
+		utils.ChBlockchain <- *aux_bc
 		if len(os.Args) >= 3 {
 			connectToNode(os.Args[2])
+		}
+		if len(os.Args) == 4 {
+			go handlers.HandleQuery(&utils.Frame{Cmd: "test", Sender: os.Args[3], Data: []string{"id=1", "name=ksi-365", "category=keyboard", "brand=redragon"}})
 		}
 		server()
 	}
 }
 
 func connectToNode(remote string) {
-	remotes := <-chRemotes
+	remotes := <-utils.ChRemotes
 	remotes = append(remotes, remote)
-	chRemotes <- remotes
-	if !send(remote, Frame{"greeting", host, []string{}}, func(cn net.Conn) {
+	utils.ChRemotes <- remotes
+	if !handlers.Send(remote, utils.Frame{Cmd: "greeting", Sender: utils.Host, Data: []string{}}, func(cn net.Conn) {
 		dec := json.NewDecoder(cn)
-		var frame Frame
+		var frame utils.Frame
 		dec.Decode(&frame)
-		remotes := <-chRemotes
+		remotes := <-utils.ChRemotes
 		// Al conectarme al nodo destino, este me da la lista de todos los
 		// nodos a los que está conectado
-		remotes = append(remotes, frame.Data...)
-		chRemotes <- remotes
-		log.Printf("%s -> Connections: %s\n", host, remotes)
+		for i := 0; i < len(frame.Data)-1; i++ {
+			remotes = append(remotes, frame.Data[i])
+		}
+		utils.ChRemotes <- remotes
+		// Y la blockchain
+		bc := <-utils.ChBlockchain
+		bc_net := []byte(frame.Data[len(frame.Data)-1])
+		json.Unmarshal(bc_net, &bc)
+		utils.ChBlockchain <- bc
+		log.Printf("%s -> Connections: %s\n", utils.Host, remotes)
+		log.Printf("%s -> Blockchain added\n", utils.Host)
 	}) {
-		log.Printf("%s -> unable to connect to %s\n", host, remote)
-	}
-}
-
-func send(remote string, frame Frame, callback func(net.Conn)) bool {
-	if cn, err := net.Dial("tcp", remote); err == nil {
-		defer cn.Close()
-		enc := json.NewEncoder(cn)
-		enc.Encode(frame)
-		if callback != nil {
-			callback(cn)
-		}
-		return true
-	} else {
-		log.Printf("%s -> can't connect to %s\n", host, remote)
-		idx := -1
-		remotes := <-chRemotes
-		for i, rem := range remotes {
-			if remote == rem {
-				idx = i
-				break
-			}
-		}
-		if idx >= 0 {
-			remotes[idx] = remotes[len(remotes)-1]
-			remotes = remotes[:len(remotes)-1]
-		}
-		chRemotes <- remotes
-		return false
+		log.Printf("%s -> Unable to connect to %s\n", utils.Host, remote)
+		handlers.SetupCloseHandler()
 	}
 }
 
 func server() {
-	if ln, err := net.Listen("tcp", host); err == nil {
+	if ln, err := net.Listen("tcp", utils.Host); err == nil {
 		defer ln.Close()
-		setupCloseHandler()
-		log.Printf("Listening on %s\n", host)
+		handlers.SetupCloseHandler()
+		log.Printf("Listening on %s\n", utils.Host)
 		for {
 			if cn, err := ln.Accept(); err == nil {
 				go fauxDispatcher(cn)
 			} else {
-				log.Printf("%s -> Can't accept connection.\n", host)
+				log.Printf("%s -> Can't accept connection.\n", utils.Host)
 			}
 		}
 	} else {
-		log.Printf("Can't listen on %s\n", host)
+		log.Printf("Can't listen on %s\n", utils.Host)
+		handlers.SetupCloseHandler()
 	}
 }
 
 func fauxDispatcher(cn net.Conn) {
 	defer cn.Close()
 	dec := json.NewDecoder(cn)
-	frame := &Frame{}
+	frame := &utils.Frame{}
 	dec.Decode(frame)
 	switch frame.Cmd {
 	case "greeting":
-		handleGreeting(cn, frame)
+		handlers.HandleGreeting(cn, frame)
 	case "add":
-		handleAdd(frame)
+		handlers.HandleAdd(frame)
 	case "goodbye":
-		handleGoodbye(frame)
+		handlers.HandleGoodbye(frame)
+	case "query":
+		handlers.HandleQuery(frame)
+	case "create":
+		handlers.HandleCreateBlock(frame)
+	case "consensus":
+		handlers.HandleConsensus()
+	case "vote":
+		handlers.HandleVote(frame)
 	}
-}
-
-func handleGreeting(cn net.Conn, frame *Frame) {
-	enc := json.NewEncoder(cn)
-	remotes := <-chRemotes
-	enc.Encode(Frame{"<response>", host, remotes})
-	notification := Frame{"add", host, []string{frame.Sender}}
-	for _, remote := range remotes {
-		send(remote, notification, nil)
-	}
-	remotes = append(remotes, frame.Sender)
-	log.Printf("%s -> Known nodes: %s\n", host, remotes)
-	chRemotes <- remotes
-}
-
-func handleAdd(frame *Frame) {
-	remotes := <-chRemotes
-	remotes = append(remotes, frame.Data...)
-	log.Printf("%s -> Known nodes: %s\n", host, remotes)
-	chRemotes <- remotes
-}
-
-func setupCloseHandler() {
-	c := make(chan os.Signal)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-c
-		handleClose()
-		os.Exit(1)
-	}()
-}
-
-func handleClose() {
-	remotes := <-chRemotes
-	notification := Frame{"goodbye", host, []string{}}
-	for _, remote := range remotes {
-		send(remote, notification, nil)
-	}
-	chRemotes <- remotes
-}
-
-func handleGoodbye(frame *Frame) {
-	remotes := <-chRemotes
-	node_down := frame.Sender
-	for i, remote := range remotes {
-		if remote == node_down {
-			remotes = append(remotes[:i], remotes[i+1:]...)
-		}
-	}
-	log.Printf("%s -> Known nodes: %s\n", host, remotes)
-	chRemotes <- remotes
 }
