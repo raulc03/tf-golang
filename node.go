@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/raulc03/tf-golang/blockchain"
@@ -89,19 +90,24 @@ func fauxDispatcher(cn net.Conn) {
 		handlers.HandleGreeting(cn, frame)
 	case "add":
 		handlers.HandleAdd(frame)
-	case "goodbye":
-		handlers.HandleGoodbye(frame)
 	case "post":
 		handlers.HandlePost(cn, frame)
-	case "get":
-		handlers.HandleGet(cn, frame)
 	case "create":
 		handlers.HandleCreateBlock(frame)
+	case "get":
+		handlers.HandleGet(cn, frame)
+	case "put":
+		handlers.HandlePut(cn, frame)
+	case "update":
+		handlers.HandleUpdateBlock(frame)
 	case "consensus":
-		handlers.HandleConsensus()
+		pos_block, _ := strconv.Atoi(frame.Data[0])
+		handlers.HandleConsensus(pos_block)
 	case "vote":
 		handlers.HandleVote(frame)
 	case "help":
 		handlers.Help(cn, frame)
+	case "goodbye":
+		handlers.HandleGoodbye(frame)
 	}
 }

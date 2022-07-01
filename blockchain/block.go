@@ -35,6 +35,12 @@ func (chain *BlockChain) AddBlock(data string) {
 	chain.Blocks = append(chain.Blocks, new)
 }
 
+func (chain *BlockChain) UpdateBlock(data string, pos_block int) {
+	prevBlock := chain.Blocks[pos_block - 1]
+	new := CreateBlock(data, prevBlock.Hash)
+	chain.Blocks[pos_block] = new
+}
+
 func Genesis() *Block{
 	return CreateBlock("Genesis", []byte{})
 }
