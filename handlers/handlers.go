@@ -87,10 +87,13 @@ func HandleConsensus() {
 	bc := <-utils.ChBlockchain
 	len_blocks := len(bc.Blocks)
 	vote_hash := hex.EncodeToString(bc.Blocks[len_blocks-1].Hash)
+	utils.ChBlockchain <- bc
+
 	m := <-utils.ChCons
+	m = make(map[string]int)
 	m[vote_hash]++
 	utils.ChCons <- m
-	utils.ChBlockchain <- bc
+
 
 	remotes := <-utils.ChRemotes
 	utils.Participants = len(remotes) + 1
@@ -113,9 +116,6 @@ func HandleVote(frame *utils.Frame) {
 	if total_value == utils.Participants {
 		if len(m) == 1 {
 			log.Printf("%s -> Block Added Succesfully - Hash [%s]", utils.Host, vote)
-			m = <-utils.ChCons
-			m = make(map[string]int)
-			utils.ChCons <- m
 		} else {
 			bc := <-utils.ChBlockchain
 			vote_hash := hex.EncodeToString(bc.Blocks[len(bc.Blocks)-1].Hash)
@@ -123,12 +123,14 @@ func HandleVote(frame *utils.Frame) {
 			m := <-utils.ChCons
 			if m[vote_hash] < utils.Participants/2 {
 				log.Printf("%s -> I have a problem, I need to build the block again \n", utils.Host)
-				Send(frame.Sender, utils.Frame{Cmd: "help", Sender: utils.Host, Data: []string{}}, func(cn net.Conn){
+				Send(frame.Sender, utils.Frame{Cmd: "help", Sender: utils.Host, Data: []string{}}, func(cn net.Conn) {
 					dec := json.NewDecoder(cn)
 					var frame utils.Frame
 					dec.Decode(&frame)
 					block_net := []byte(frame.Data[0])
-					bc := <- utils.ChBlockchain
+					bc := <-utils.ChBlockchain
+					// Obtengo el bloque del nodo al que se lo pedí y lo
+					// reemplazo por mi bloque corrupto
 					json.Unmarshal(block_net, bc.Blocks[len(bc.Blocks)-1])
 					utils.ChBlockchain <- bc
 					go startConsensus()
@@ -139,10 +141,10 @@ func HandleVote(frame *utils.Frame) {
 	}
 }
 
-func Help(cn net.Conn, frame *utils.Frame){
+func Help(cn net.Conn, frame *utils.Frame) {
 	bc := <-utils.ChBlockchain
 	enc := json.NewEncoder(cn)
-	last_block := bc.Blocks[len(bc.Blocks) - 1]
+	last_block := bc.Blocks[len(bc.Blocks)-1]
 	out, err := json.Marshal(last_block)
 	if err == nil {
 		data := []string{string(out)}
@@ -150,8 +152,6 @@ func Help(cn net.Conn, frame *utils.Frame){
 	}
 }
 
-// Añadimos el bloque a la blockchain del nodo
-// Mandamos la data con la que se construye el bloque a los demás nodos
 func HandlePost(cn net.Conn, frame *utils.Frame) {
 	// Cambiará la lógica
 	HandleCreateBlock(frame)
@@ -161,23 +161,42 @@ func HandlePost(cn net.Conn, frame *utils.Frame) {
 		Send(remote, notification, nil)
 	}
 	utils.ChRemotes <- remotes
-	// Agregar la respueta
+	enc := json.NewEncoder(cn)
+	// Enviamos respuesta
+	data := []string{string(`"status":"OK"`)}
+	enc.Encode(utils.Frame{Cmd: "<response_post>", Sender: utils.Host, Data: data})
+
+	// Empezamos consenso
 	startConsensus()
 }
 
-func HandleGet(cn net.Conn, frame *utils.Frame){}
+func HandleGet(cn net.Conn, frame *utils.Frame) {
+	enc := json.NewEncoder(cn)
+	bc := <-utils.ChBlockchain
+
+	out, err := json.Marshal(bc)
+	utils.ChBlockchain <- bc
+	if err != nil {
+		enc.Encode(utils.Frame{Cmd: "<response_get>", Sender: utils.Host, Data: []string{`"status":` + err.Error()}})
+		return
+	}
+
+	// Enviando la blockchain como respuesta
+	data := []string{string(out)}
+	rsp_get := utils.Frame{Cmd: "<response_get>", Sender: utils.Host, Data: data}
+	enc.Encode(rsp_get)
+}
 
 // Obtenemos la data para construir el bloque que se añadirá al blockchain
 func HandleCreateBlock(frame *utils.Frame) {
 	blockchain := <-utils.ChBlockchain
-	// utils.Frame Data -> [name=<value>,category=<value>,...]
 	data := strings.Join(frame.Data, ",")
 	blockchain.AddBlock(data)
-	for _, block := range blockchain.Blocks {
-		log.Printf("Previous Hash: %x\n", block.PrevHash)
-		log.Printf("Data in Block: %s\n", block.Data)
-		log.Printf("Hash: %x\n", block.Hash)
-	}
+	// for _, block := range blockchain.Blocks {
+	// 	log.Printf("Previous Hash: %x\n", block.PrevHash)
+	// 	log.Printf("Data in Block: %s\n", block.Data)
+	// 	log.Printf("Hash: %x\n", block.Hash)
+	// }
 	utils.ChBlockchain <- blockchain
 }
 
