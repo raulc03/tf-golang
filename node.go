@@ -29,9 +29,6 @@ func main() {
 		if len(os.Args) >= 3 {
 			connectToNode(os.Args[2])
 		}
-		if len(os.Args) == 4 {
-			go handlers.HandleQuery(&utils.Frame{Cmd: "test", Sender: os.Args[3], Data: []string{"id=1", "name=ksi-365", "category=keyboard", "brand=redragon"}})
-		}
 		server()
 	}
 }
@@ -94,13 +91,17 @@ func fauxDispatcher(cn net.Conn) {
 		handlers.HandleAdd(frame)
 	case "goodbye":
 		handlers.HandleGoodbye(frame)
-	case "query":
-		handlers.HandleQuery(frame)
+	case "post":
+		handlers.HandlePost(cn, frame)
+	case "get":
+		handlers.HandleGet(cn, frame)
 	case "create":
 		handlers.HandleCreateBlock(frame)
 	case "consensus":
 		handlers.HandleConsensus()
 	case "vote":
 		handlers.HandleVote(frame)
+	case "help":
+		handlers.Help(cn, frame)
 	}
 }

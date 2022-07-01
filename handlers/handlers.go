@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
-	"math/rand"
 	"net"
 	"os"
 	"os/signal"
@@ -120,25 +119,40 @@ func HandleVote(frame *utils.Frame) {
 		} else {
 			bc := <-utils.ChBlockchain
 			vote_hash := hex.EncodeToString(bc.Blocks[len(bc.Blocks)-1].Hash)
+			utils.ChBlockchain <- bc
 			m := <-utils.ChCons
 			if m[vote_hash] < utils.Participants/2 {
 				log.Printf("%s -> I have a problem, I need to build the block again \n", utils.Host)
-				//x1 := rand.NewSource(time.Now().UnixNano())
-				//y1 := rand.New(x1)
-				//remotes := <- utils.ChRemotes
-				//Send(remotes[y1.Intn(len(remotes))],
-				//utils.Frame{Cmd: "consensus", Sender: utils.Host, Data: []string{}}, nil)
-				//utils.ChRemotes <- remotes
+				Send(frame.Sender, utils.Frame{Cmd: "help", Sender: utils.Host, Data: []string{}}, func(cn net.Conn){
+					dec := json.NewDecoder(cn)
+					var frame utils.Frame
+					dec.Decode(&frame)
+					block_net := []byte(frame.Data[0])
+					bc := <- utils.ChBlockchain
+					json.Unmarshal(block_net, bc.Blocks[len(bc.Blocks)-1])
+					utils.ChBlockchain <- bc
+					go startConsensus()
+				})
 			}
 			utils.ChCons <- m
-			utils.ChBlockchain <- bc
 		}
+	}
+}
+
+func Help(cn net.Conn, frame *utils.Frame){
+	bc := <-utils.ChBlockchain
+	enc := json.NewEncoder(cn)
+	last_block := bc.Blocks[len(bc.Blocks) - 1]
+	out, err := json.Marshal(last_block)
+	if err == nil {
+		data := []string{string(out)}
+		enc.Encode(utils.Frame{Cmd: "<response>", Sender: utils.Host, Data: data})
 	}
 }
 
 // Añadimos el bloque a la blockchain del nodo
 // Mandamos la data con la que se construye el bloque a los demás nodos
-func HandleQuery(frame *utils.Frame) {
+func HandlePost(cn net.Conn, frame *utils.Frame) {
 	// Cambiará la lógica
 	HandleCreateBlock(frame)
 	notification := utils.Frame{Cmd: "create", Sender: utils.Host, Data: frame.Data}
@@ -147,8 +161,11 @@ func HandleQuery(frame *utils.Frame) {
 		Send(remote, notification, nil)
 	}
 	utils.ChRemotes <- remotes
+	// Agregar la respueta
 	startConsensus()
 }
+
+func HandleGet(cn net.Conn, frame *utils.Frame){}
 
 // Obtenemos la data para construir el bloque que se añadirá al blockchain
 func HandleCreateBlock(frame *utils.Frame) {
@@ -156,11 +173,11 @@ func HandleCreateBlock(frame *utils.Frame) {
 	// utils.Frame Data -> [name=<value>,category=<value>,...]
 	data := strings.Join(frame.Data, ",")
 	blockchain.AddBlock(data)
-	//for _, block := range blockchain.Blocks {
-	//	log.Printf("Previous Hash: %x\n", block.PrevHash)
-	//	log.Printf("Data in Block: %s\n", block.Data)
-	//	log.Printf("Hash: %x\n", block.Hash)
-	//}
+	for _, block := range blockchain.Blocks {
+		log.Printf("Previous Hash: %x\n", block.PrevHash)
+		log.Printf("Data in Block: %s\n", block.Data)
+		log.Printf("Hash: %x\n", block.Hash)
+	}
 	utils.ChBlockchain <- blockchain
 }
 
