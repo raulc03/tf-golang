@@ -109,5 +109,7 @@ func fauxDispatcher(cn net.Conn) {
 		handlers.Help(cn, frame)
 	case "goodbye":
 		handlers.HandleGoodbye(frame)
+	case "test_consensus":
+		handlers.HandleCorruptHash(cn, frame)
 	}
 }

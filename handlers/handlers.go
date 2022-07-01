@@ -89,6 +89,31 @@ func HandleCreateBlock(frame *utils.Frame) {
 	utils.ChBlockchain <- bc
 }
 
+// Hash Corrupto
+func HandleCorruptHash(cn net.Conn, frame *utils.Frame) {
+	HandleCreateBlock(&utils.Frame{Cmd: "create", Sender: frame.Sender,
+		Data: []string{`"id":1`, `"name":"ruperto"`, `"category":"Roberto el que pega"`,
+			`"brand":"Logitech"`, `"serie":"123456789"`}})
+	// Enviamos respuesta
+	enc := json.NewEncoder(cn)
+	data := []string{string(`"status":"OK"`)}
+	enc.Encode(utils.Frame{Cmd: "<response_post>", Sender: utils.Host, Data: data})
+
+	// Enviamos información del bloque a los demás nodos
+	notification := utils.Frame{Cmd: "create", Sender: utils.Host, Data: frame.Data}
+	remotes := <-utils.ChRemotes
+	for _, remote := range remotes {
+		Send(remote, notification, nil)
+	}
+	utils.ChRemotes <- remotes
+
+	// Empezamos consenso del último bloque añadido
+	bc := <-utils.ChBlockchain
+	pos_block := len(bc.Blocks) - 1
+	utils.ChBlockchain <- bc
+	startConsensus(pos_block)
+}
+
 func HandlePost(cn net.Conn, frame *utils.Frame) {
 	// Añadimos el bloque a la blockchain
 	HandleCreateBlock(frame)
@@ -213,7 +238,7 @@ func HandleVote(frame *utils.Frame) {
 			vote_hash := hex.EncodeToString(bc.Blocks[pos_block].Hash)
 			utils.ChBlockchain <- bc
 			m := <-utils.ChCons
-			if m[vote_hash] < utils.Participants/2 {
+			if m[vote_hash] < (utils.Participants/2) + 1 {
 				log.Printf("%s -> I have a problem, I need to build the block again \n", utils.Host)
 
 				Send(frame.Sender, utils.Frame{Cmd: "help", Sender: utils.Host,
