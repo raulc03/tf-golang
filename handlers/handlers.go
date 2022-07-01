@@ -108,8 +108,9 @@ func HandlePost(cn net.Conn, frame *utils.Frame) {
 
 	// Empezamos consenso del último bloque añadido
 	bc := <-utils.ChBlockchain
-	startConsensus(len(bc.Blocks) - 1)
+	pos_block := len(bc.Blocks) - 1
 	utils.ChBlockchain <- bc
+	startConsensus(pos_block)
 }
 
 func HandleGet(cn net.Conn, frame *utils.Frame) {
@@ -175,6 +176,7 @@ func startConsensus(pos_block int) {
 func HandleConsensus(pos_block int) {
 	bc := <-utils.ChBlockchain
 	vote_hash := hex.EncodeToString(bc.Blocks[pos_block].Hash)
+
 	utils.ChBlockchain <- bc
 
 	m := <-utils.ChCons
