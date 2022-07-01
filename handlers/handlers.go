@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/raulc03/tf-golang/utils"
 )
@@ -83,7 +82,6 @@ func startConsensus() {
 }
 
 func HandleConsensus() {
-	time.Sleep(3 * time.Second)
 	bc := <-utils.ChBlockchain
 	len_blocks := len(bc.Blocks)
 	vote_hash := hex.EncodeToString(bc.Blocks[len_blocks-1].Hash)
