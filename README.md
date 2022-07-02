@@ -1,5 +1,5 @@
 # Trabajo Final de Programación Concurrente y Distribuida
 ## Descripción
-Api que permitirá realizar consultas de tipo CRUD (Create, Register, Update, Delete)
+Api que permitirá realizar consultas de tipo CRUD (Create, Register, Update)
 sobre una blockchain, y que de esta manera, se puedan manejar instancias de
 productos
