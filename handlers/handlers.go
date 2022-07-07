@@ -10,11 +10,33 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/raulc03/tf-golang/utils"
 )
 
-func Send(remote string, frame utils.Frame, callback func(net.Conn)) bool {
+func retry(remote string, frame utils.Frame, remotes []string, to chan bool, callback func(net.Conn)) {
+	var max_attempts int = 5
+	for {
+		if cn, err := net.Dial("tcp", remote); err == nil {
+			defer cn.Close()
+			enc := json.NewEncoder(cn)
+			enc.Encode(frame)
+			if callback != nil {
+				callback(cn)
+			}
+			to <- true
+			break
+		}
+		max_attempts--
+		if max_attempts == 0 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func Send(remote string, frame utils.Frame, remotes []string, callback func(net.Conn)) bool {
 	if cn, err := net.Dial("tcp", remote); err == nil {
 		defer cn.Close()
 		enc := json.NewEncoder(cn)
@@ -24,22 +46,27 @@ func Send(remote string, frame utils.Frame, callback func(net.Conn)) bool {
 		}
 		return true
 	} else {
-		log.Printf("%s -> can't connect to %s\n", utils.Host, remote)
-		idx := -1
-		remotes := <-utils.ChRemotes
-		for i, rem := range remotes {
-			if remote == rem {
-				idx = i
-				break
+		to := make(chan bool, 1)
+		go retry(remote, frame, remotes, to, callback)
+		select {
+		case res := <-to:
+			return res
+		case <-time.After(3 * time.Second):
+			log.Printf("%s -> can't connect to %s\n", utils.Host, remote)
+			idx := -1
+			for i, rem := range remotes {
+				if remote == rem {
+					idx = i
+				} else {
+					Send(rem, utils.Frame{Cmd: "goodbye", Sender: utils.Host,
+						Data: []string{remote}}, remotes, nil)
+				}
 			}
+			if idx >= 0 {
+                remotes[idx] = ""
+			}
+			return false
 		}
-		if idx >= 0 {
-			remotes[idx] = remotes[len(remotes)-1]
-			remotes = remotes[:len(remotes)-1]
-		}
-		utils.ChRemotes <- remotes
-		SetupCloseHandler()
-		return false
 	}
 }
 
@@ -65,7 +92,7 @@ func HandleGreeting(cn net.Conn, frame *utils.Frame) {
 	notification := utils.Frame{Cmd: "add", Sender: utils.Host,
 		Data: []string{frame.Sender}}
 	for _, remote := range remotes {
-		Send(remote, notification, nil)
+		Send(remote, notification, remotes, nil)
 	}
 	// Agrego al nuevo nodo a mis contactos
 	remotes = append(remotes, frame.Sender)
@@ -103,7 +130,7 @@ func HandleCorruptHash(cn net.Conn, frame *utils.Frame) {
 	notification := utils.Frame{Cmd: "create", Sender: utils.Host, Data: frame.Data}
 	remotes := <-utils.ChRemotes
 	for _, remote := range remotes {
-		Send(remote, notification, nil)
+		Send(remote, notification, remotes, nil)
 	}
 	utils.ChRemotes <- remotes
 
@@ -126,9 +153,15 @@ func HandlePost(cn net.Conn, frame *utils.Frame) {
 	// Enviamos información del bloque a los demás nodos
 	notification := utils.Frame{Cmd: "create", Sender: utils.Host, Data: frame.Data}
 	remotes := <-utils.ChRemotes
+    rm := remotes
 	for _, remote := range remotes {
-		Send(remote, notification, nil)
+		Send(remote, notification, rm, nil)
 	}
+    for idx, remote := range remotes {
+        if remote == ""{
+            remotes = append(remotes[:idx], remotes[idx + 1:]...) 
+        }
+    }
 	utils.ChRemotes <- remotes
 
 	// Empezamos consenso del último bloque añadido
@@ -179,7 +212,7 @@ func HandlePut(cn net.Conn, frame *utils.Frame) {
 	notification := utils.Frame{Cmd: "update", Sender: utils.Host, Data: frame.Data}
 	remotes := <-utils.ChRemotes
 	for _, remote := range remotes {
-		Send(remote, notification, nil)
+		Send(remote, notification, remotes, nil)
 	}
 	utils.ChRemotes <- remotes
 
@@ -189,16 +222,20 @@ func HandlePut(cn net.Conn, frame *utils.Frame) {
 
 func startConsensus(pos_block int) {
 	remotes := <-utils.ChRemotes
+	participants := len(remotes) + 1
 	for _, remote := range remotes {
 		log.Printf("%s -> Notifiying about Consensus to %s\n", utils.Host, remote)
 		Send(remote, utils.Frame{Cmd: "consensus", Sender: utils.Host,
-			Data: []string{strconv.Itoa(pos_block)}}, nil)
+			Data: []string{strconv.Itoa(pos_block), strconv.Itoa(participants)}},
+			remotes, nil)
 	}
 	utils.ChRemotes <- remotes
-	HandleConsensus(pos_block)
+	//log.Printf("Starting Consensus\n")
+	//time.Sleep(5 * time.Second)
+	HandleConsensus(pos_block, participants)
 }
 
-func HandleConsensus(pos_block int) {
+func HandleConsensus(pos_block int, participants int) {
 	bc := <-utils.ChBlockchain
 	vote_hash := hex.EncodeToString(bc.Blocks[pos_block].Hash)
 
@@ -210,11 +247,11 @@ func HandleConsensus(pos_block int) {
 	utils.ChCons <- m
 
 	remotes := <-utils.ChRemotes
-	utils.Participants = len(remotes) + 1
-	for _, remote := range remotes {
-		log.Printf("%s -> Sending vote [%s] to %s\n", utils.Host, vote_hash, remote)
-		Send(remote, utils.Frame{Cmd: "vote", Sender: utils.Host,
-			Data: []string{vote_hash, strconv.Itoa(pos_block)}}, nil)
+	utils.Participants = participants
+	for i := 0; i < utils.Participants-1; i++ {
+		log.Printf("%s -> Sending vote [%s] to %s\n", utils.Host, vote_hash, remotes[i])
+		Send(remotes[i], utils.Frame{Cmd: "vote", Sender: utils.Host,
+			Data: []string{vote_hash, strconv.Itoa(pos_block)}}, remotes, nil)
 	}
 	utils.ChRemotes <- remotes
 }
@@ -238,11 +275,11 @@ func HandleVote(frame *utils.Frame) {
 			vote_hash := hex.EncodeToString(bc.Blocks[pos_block].Hash)
 			utils.ChBlockchain <- bc
 			m := <-utils.ChCons
-			if m[vote_hash] < (utils.Participants/2) + 1 {
+			if m[vote_hash] < (utils.Participants/2)+1 {
 				log.Printf("%s -> I have a problem, I need to build the block again \n", utils.Host)
-
+				remotes := <-utils.ChRemotes
 				Send(frame.Sender, utils.Frame{Cmd: "help", Sender: utils.Host,
-					Data: []string{strconv.Itoa(pos_block)}}, func(cn net.Conn) {
+					Data: []string{strconv.Itoa(pos_block)}}, remotes, func(cn net.Conn) {
 
 					dec := json.NewDecoder(cn)
 					var frame utils.Frame
@@ -255,6 +292,7 @@ func HandleVote(frame *utils.Frame) {
 					utils.ChBlockchain <- bc
 					go startConsensus(pos_block)
 				})
+				utils.ChRemotes <- remotes
 			}
 			utils.ChCons <- m
 		}
@@ -271,9 +309,10 @@ func Help(cn net.Conn, frame *utils.Frame) {
 		enc.Encode(utils.Frame{Cmd: "<response>", Sender: utils.Host, Data: data})
 	}
 }
+
 func HandleGoodbye(frame *utils.Frame) {
 	remotes := <-utils.ChRemotes
-	node_down := frame.Sender
+	node_down := frame.Data[0]
 	for i, remote := range remotes {
 		if remote == node_down {
 			remotes = append(remotes[:i], remotes[i+1:]...)
@@ -287,7 +326,7 @@ func HandleClose() {
 	remotes := <-utils.ChRemotes
 	notification := utils.Frame{Cmd: "goodbye", Sender: utils.Host, Data: []string{}}
 	for _, remote := range remotes {
-		Send(remote, notification, nil)
+		Send(remote, notification, remotes, nil)
 	}
 	utils.ChRemotes <- remotes
 }

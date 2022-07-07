@@ -38,7 +38,8 @@ func connectToNode(remote string) {
 	remotes := <-utils.ChRemotes
 	remotes = append(remotes, remote)
 	utils.ChRemotes <- remotes
-	if !handlers.Send(remote, utils.Frame{Cmd: "greeting", Sender: utils.Host, Data: []string{}}, func(cn net.Conn) {
+	if !handlers.Send(remote, utils.Frame{Cmd: "greeting", Sender: utils.Host,
+		Data: []string{}}, remotes, func(cn net.Conn) {
 		dec := json.NewDecoder(cn)
 		var frame utils.Frame
 		dec.Decode(&frame)
@@ -58,14 +59,12 @@ func connectToNode(remote string) {
 		log.Printf("%s -> Blockchain added\n", utils.Host)
 	}) {
 		log.Printf("%s -> Unable to connect to %s\n", utils.Host, remote)
-		handlers.SetupCloseHandler()
 	}
 }
 
 func server() {
 	if ln, err := net.Listen("tcp", utils.Host); err == nil {
 		defer ln.Close()
-		handlers.SetupCloseHandler()
 		log.Printf("Listening on %s\n", utils.Host)
 		for {
 			if cn, err := ln.Accept(); err == nil {
@@ -76,7 +75,6 @@ func server() {
 		}
 	} else {
 		log.Printf("Can't listen on %s\n", utils.Host)
-		handlers.SetupCloseHandler()
 	}
 }
 
@@ -102,7 +100,8 @@ func fauxDispatcher(cn net.Conn) {
 		handlers.HandleUpdateBlock(frame)
 	case "consensus":
 		pos_block, _ := strconv.Atoi(frame.Data[0])
-		handlers.HandleConsensus(pos_block)
+		participants, _ := strconv.Atoi(frame.Data[1])
+		handlers.HandleConsensus(pos_block, participants)
 	case "vote":
 		handlers.HandleVote(frame)
 	case "help":
